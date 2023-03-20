@@ -9,5 +9,5 @@ class Config:
   mainnet_byet="60"
   time_between=300000
   max_block_size=10000000
-  difficulty=15
+  difficulty=5
   block_reward=5

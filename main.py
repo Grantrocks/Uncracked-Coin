@@ -78,10 +78,10 @@ def add_block():
     data=json.loads(codecs.decode(a['data'],"hex").decode())
     total_sent+=data['total_sent']
   current_block['total_sent']=total_sent
-  height=blockchain[-1]['height']+1
+  height=len(blockchain)
   current_block['height']=height
   blockchain.append(current_block)
-  with open(".data/blockchian.json","w") as f:
+  with open(".data/blockchain.json","w") as f:
     json.dump(blockchain,f)
   current_block=block_template
   with open(".data/current_block.json","w") as f:
@@ -94,7 +94,6 @@ def get_key_balance(key):
   for a in blockchain:
     for b in a['transactions']:
       data=json.loads(codecs.decode(b['data'],"hex").decode())
-      
       if data['in']['scriptPubKey']['address']==key:
         balance+=data['in']['value']
       if data['out']['address']==key:
@@ -108,9 +107,12 @@ def get_key_balance(key):
   return balance
 
 def dump_transaction(transaction):
-  print("GOOD TrANSACTION")
+  global current_block
+  print("GOOD TRANSACTION")
   current_block['transactions'].append(transaction)
   current_block['total_transactions']=len(current_block['transactions'])
+  with open(".data/current_block.json","w") as f:
+    json.dump(current_block,f)
   if len(json.dumps(current_block).encode().hex())>=configfile.Config.max_block_size:
     add_block()
   with open(".data/blockchain.json") as f:
@@ -143,14 +145,14 @@ def create_transaction(data):
   sign_msg=(data['scriptSig']['pub']+data['hashed_pub']+str(data['value'])+data['message']+data['in']+data['out']).encode()
   
   verkey= ecdsa.VerifyingKey.from_string(bytearray.fromhex(data['scriptSig']['pub'][2:]), curve=ecdsa.SECP256k1) # the default is sha1
-  print(verkey.verify(bytes.fromhex(data['scriptSig']['sig']),sign_msg,hashlib.sha256))
 
   good=False
   try:
     good=verkey.verify(bytes.fromhex(data['scriptSig']['sig']), sign_msg,hashlib.sha256)
   except:
     return {"result":False,"reason":"Invalid transaction signature!"}
-  
+  if not good:
+    return {"result":False,"reason":"Invalid transaction signature!"}
   a1=hashlib.sha512(data["scriptSig"]['pub'].encode()).hexdigest()
   a2=hashlib.new("ripemd160",a1.encode()).hexdigest()
   modified_key_hash = "06" + a2
@@ -217,11 +219,13 @@ def coinbase_transaction(out,value,message):
   transaction_temp['hash']=transaction['hash']
   transaction_temp['time']=transaction['locktime']
   transaction_temp['coinbase']=True
+  dump_transaction(transaction_temp)
   return {"result":True,"info":"Transaction sent, "+transaction_temp['txid']}
 def give_miner_job():
   with open(".data/unconfirmed.json") as f:
     unconfirmed=json.load(f)
-  if not len(unconfirmed)>0:
+  print(type(len(unconfirmed)))
+  if len(unconfirmed)==0 or len(unconfirmed)=="0":
     return {"result":False,"reason":"No blocks available to mine at the moment."}
   transactions=codecs.encode(json.dumps(unconfirmed[0]['transactions']).encode(),"hex").decode()
   blob=codecs.encode((str(unconfirmed[0]['height'])+transactions+unconfirmed[0]['previousblockhash']+str(unconfirmed[0]["timeadded"])).encode(),"hex").decode()
@@ -238,6 +242,11 @@ def block_mined(address,nonce,hash):
   with open('.data/blockchain.json',"w") as f:
     json.dump(blockchain,f)
   coinbase_transaction(address,configfile.Config.block_reward,"Block Reward")
+  with open(".data/unconfirmed.json") as f:
+    unc=json.load(f)
+    unc.pop(0)
+  with open(".data/unconfirmed.json","w") as f:
+    json.dump(unc,f)
 def check_job(data):
   with open(".data/unconfirmed.json") as f:
     unconfirmed=json.load(f)
@@ -270,7 +279,10 @@ async def sock(websocket):
         elif commands[0]=="SEND":
           res=create_transaction(json.loads(commands[1]))
           await websocket.send("SEND_RESULT;"+json.dumps(res))
+        elif commands[0]=="PING":
+          await websocket.send("PONG;")
 async def main():
     async with websockets.serve(sock, "0.0.0.0", 8000):
         await asyncio.Future()  # run forever
 asyncio.run(main())
+print("STARTING SERVER...")
