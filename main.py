@@ -117,6 +117,7 @@ def dump_transaction(transaction):
     add_block()
   with open(".data/blockchain.json") as f:
     blockchain=json.load(f)
+  print(time.time()>=(configfile.Config.time_between+blockchain[-1]['timeadded']))
   if (time.time()-blockchain[-1]['timeadded'])>=configfile.Config.time_between:
     add_block()
 
