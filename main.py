@@ -83,10 +83,16 @@ def add_block():
   blockchain.append(current_block)
   with open(".data/blockchain.json","w") as f:
     json.dump(blockchain,f)
+  old_block=current_block
   current_block=block_template
+  current_block['height']=len(blockchain)
   with open(".data/current_block.json","w") as f:
     json.dump(current_block,f)
-  
+  with open(".data/unconfirmed.json") as f:
+    unconfirmed=json.load(f)
+  unconfirmed.append(old_block)
+  with open(".data/unconfirmed.json","w") as f:
+    json.dump(unconfirmed,f)
 def get_key_balance(key):
   with open(".data/blockchain.json") as f:
     blockchain=json.load(f)
@@ -117,8 +123,8 @@ def dump_transaction(transaction):
     add_block()
   with open(".data/blockchain.json") as f:
     blockchain=json.load(f)
-  print(time.time()>=(configfile.Config.time_between+blockchain[-1]['timeadded']))
-  if (time.time()-blockchain[-1]['timeadded'])>=configfile.Config.time_between:
+  print(time.time()-blockchain[-1]['timeadded'])
+  if (time.time()-float(configfile.Config.time_between))>=blockchain[-1]['timeadded']:
     add_block()
 
 
@@ -137,6 +143,10 @@ def create_transaction(data):
   }
   
   """
+  if data['value']<=0:
+    return {"result":False,"reason":"You cant send nothing!","info":"You cant send 0!"}
+  if data['out']==data['in']:
+    return {"result":False,"reason":"Not possible!","info":"You cant send to yourself!"}
   if len(data['message'])>120:
     return {"result":False,"reason":"Message must be less than 120 characters!"}
   dup_hashed_pubkey=hashlib.new("ripemd160",hashlib.sha512(data["scriptSig"]['pub'].encode()).hexdigest().encode()).hexdigest()
@@ -225,12 +235,12 @@ def coinbase_transaction(out,value,message):
 def give_miner_job():
   with open(".data/unconfirmed.json") as f:
     unconfirmed=json.load(f)
-  print(type(len(unconfirmed)))
-  if len(unconfirmed)==0 or len(unconfirmed)=="0":
-    return {"result":False,"reason":"No blocks available to mine at the moment."}
-  transactions=codecs.encode(json.dumps(unconfirmed[0]['transactions']).encode(),"hex").decode()
-  blob=codecs.encode((str(unconfirmed[0]['height'])+transactions+unconfirmed[0]['previousblockhash']+str(unconfirmed[0]["timeadded"])).encode(),"hex").decode()
-  return [blob,str(configfile.Config.difficulty)]
+    if not len(unconfirmed)>0:
+      return {"result":False,"reason":"No blocks available to mine at the moment."}
+    else:
+      transactions=codecs.encode(json.dumps(unconfirmed[0]['transactions']).encode(),"hex").decode()
+      blob=codecs.encode((str(unconfirmed[0]['height'])+transactions+unconfirmed[0]['previousblockhash']+str(unconfirmed[0]["timeadded"])).encode(),"hex").decode()
+      return [blob,str(configfile.Config.difficulty)]
 
 def block_mined(address,nonce,hash):
   with open(".data/blockchain.json") as f:
@@ -240,6 +250,9 @@ def block_mined(address,nonce,hash):
   blockchain[-1]['confirmed_by']=address
   blockchain[-1]['nonce']=nonce
   blockchain[-1]['hash']=hash
+  for a in range(len(blockchain)):
+    if blockchain[a]!=blockchain[-1]:
+      blockchain[a]['confirmations']+=1
   with open('.data/blockchain.json',"w") as f:
     json.dump(blockchain,f)
   coinbase_transaction(address,configfile.Config.block_reward,"Block Reward")
@@ -251,17 +264,55 @@ def block_mined(address,nonce,hash):
 def check_job(data):
   with open(".data/unconfirmed.json") as f:
     unconfirmed=json.load(f)
-  transactions=codecs.encode(json.dumps(unconfirmed[0]['transactions']).encode(),"hex").decode()
-  blob=codecs.encode((str(unconfirmed[0]['height'])+transactions+unconfirmed[0]['previousblockhash']+str(unconfirmed[0]["timeadded"])).encode(),"hex").decode()
-  hashed_blob=hashlib.sha512((blob+str(data[1])).encode()).hexdigest()
-  if hashed_blob==data[0] and hashed_blob.startswith("0"*configfile.Config.difficulty):
-    block_mined(data[2],data[1],data[0])
-    print("GOOD")
-    return {"result":True,"info":"Valid"}
+  if len(unconfirmed)>0:
+    transactions=codecs.encode(json.dumps(unconfirmed[0]['transactions']).encode(),"hex").decode()
+    blob=codecs.encode((str(unconfirmed[0]['height'])+transactions+unconfirmed[0]['previousblockhash']+str(unconfirmed[0]["timeadded"])).encode(),"hex").decode()
+    hashed_blob=hashlib.sha512((blob+str(data[1])).encode()).hexdigest()
+    if hashed_blob==data[0] and hashed_blob.startswith("0"*configfile.Config.difficulty):
+      block_mined(data[2],data[1],data[0])
+      print("GOOD")
+      return {"result":True,"info":"Valid"}
+    else:
+      print("BAD")
+      return {"result":False,"reason":"Invalid hash or nonce!"}
   else:
-    print("BAD")
-    return {"result":False,"reason":"Invalid hash or nonce!"}
-  
+    return {"result":False,"reason":"No jobs to check."}
+def get_block(blocknum):
+  with open(".data/blockchain.json") as f:
+    blockchain=json.load(f)
+  return blockchain[blocknum]
+def get_transaction(id,type):
+  with open(".data/blockchain.json") as f:
+    blockchain=json.load(f)
+  for a in blockchain:
+    for t in a['transactions']:
+      if type=="txid":
+        if t['txid']==id:
+          return t
+      elif type=="hash":
+        if t['hash']==id:
+          return t
+  return {"result":False,"reason":"Not found!"}
+def get_transaction_history(address):
+  with open(".data/blockchain.json") as f:
+    blockchain=json.load(f)
+  transactions=[]
+  for a in blockchain:
+    for t in a['transactions']:
+      tdata=json.loads(bytes.fromhex(t['data']).decode('utf-8'))
+      if tdata['out']['address']==address:
+        transactions.append(tdata)
+      if tdata['in']['scriptPubKey']['address']==address:
+        transactions.append(tdata)
+  with open('.data/current_block.json') as f:
+    current=json.load(f)
+  for t in current['transactions']:
+    tdata=json.loads(bytes.fromhex(t['data']).decode('utf-8'))
+    if tdata['out']['address']==address:
+      transactions.append(tdata)
+    if tdata['in']['scriptPubKey']['address']==address:
+      transactions.append(tdata)
+  return transactions
 async def sock(websocket):
     async for message in websocket:
         print(f"[{str(time.time())}]: {message}")
@@ -282,8 +333,20 @@ async def sock(websocket):
           await websocket.send("SEND_RESULT;"+json.dumps(res))
         elif commands[0]=="PING":
           await websocket.send("PONG;")
+        elif commands[0]=="GET_BLOCK":
+          block=get_block(int(commands[1]))
+          await websocket.send("BLOCK_DATA;"+json.dumps(block))
+        elif commands[0]=="GET_TRANSACTION_BY_ID":
+          transaction=get_transaction(commands[1],"txid")
+          await websocket.send("TRANSACTION;"+json.dumps(transaction))
+        elif commands[0]=="GET_TRANSACTION_BY_HASH":
+          transaction=get_transaction(commands[1],"hash")
+          await websocket.send("TRANSACTION;"+json.dumps(transaction))
+        elif commands[0]=="GET_ADDRESS_TRANSACTIONS":
+          tx_his=get_transaction_history(commands[1])
+          await websocket.send("TRANSACTION_HISTORY;"+json.dumps(tx_his))
 async def main():
     async with websockets.serve(sock, "0.0.0.0", 8000):
         await asyncio.Future()  # run forever
+print("STARTED SERVER.")
 asyncio.run(main())
-print("STARTING SERVER...")
