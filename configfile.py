@@ -10,4 +10,4 @@ class Config:
   time_between=300
   max_block_size=10000000
   difficulty=5
-  block_reward=5
+  block_reward=20000000000

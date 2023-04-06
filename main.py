@@ -65,13 +65,16 @@ with open(".data/current_block.json") as f:
     current_block=block_template
     with open(".data/current_block.json","w") as f:
       json.dump(current_block,f)
+def get_current_block():
+  with open(".data/current_block.json") as f:
+    return json.load(f)
 def add_block():
-  global current_block
+  current_block=get_current_block()
   with open(".data/blockchain.json") as f:
     blockchain=json.load(f)
   current_block['timeadded']=time.time()
   if not blockchain[-1]['confirmations']>=1:
-    return {"result":False,"reason":"Last block not confirmed!"}
+   return {"result":False,"reason":"Last block not confirmed!"}
   current_block['previousblockhash']=blockchain[-1]['hash']
   total_sent=0
   for a in current_block['transactions']:
@@ -84,7 +87,21 @@ def add_block():
   with open(".data/blockchain.json","w") as f:
     json.dump(blockchain,f)
   old_block=current_block
-  current_block=block_template
+  current_block={
+    "version":configfile.Config.version,
+    "timeadded":"",
+    "previousblockhash":"",
+    "mintime":configfile.Config.time_between,
+    "total_sent":0,
+    "total_transactions":0,
+    "transactions":[],
+    "height":0,
+    "confirmations":0,
+    "confirmed":None,
+    "confirmed_by":None,
+    "nonce":None,
+    "hash":""
+  }
   current_block['height']=len(blockchain)
   with open(".data/current_block.json","w") as f:
     json.dump(current_block,f)
@@ -94,6 +111,7 @@ def add_block():
   with open(".data/unconfirmed.json","w") as f:
     json.dump(unconfirmed,f)
 def get_key_balance(key):
+  current_block=get_current_block()
   with open(".data/blockchain.json") as f:
     blockchain=json.load(f)
   balance=0
@@ -113,7 +131,7 @@ def get_key_balance(key):
   return balance
 
 def dump_transaction(transaction):
-  global current_block
+  current_block=get_current_block()
   print("GOOD TRANSACTION")
   current_block['transactions'].append(transaction)
   current_block['total_transactions']=len(current_block['transactions'])
@@ -129,6 +147,7 @@ def dump_transaction(transaction):
 
 
 def create_transaction(data):
+  current_block=get_current_block()
   """DATA TO BE ENTERED
   {
     "scriptSig":{
@@ -201,6 +220,7 @@ def create_transaction(data):
   transaction_temp['txid']=transaction['txid']
   transaction_temp['hash']=transaction['hash']
   transaction_temp['time']=transaction['locktime']
+  transaction_temp['coinbase']=False
   if not get_key_balance(data['in'])>=data['value']:
     return {"result":False,"reason":"Trying to send more than available!"}
   dump_transaction(transaction_temp)
@@ -208,13 +228,14 @@ def create_transaction(data):
   
   
 def coinbase_transaction(out,value,message):
+  current_block=get_current_block()
   transaction=transaction_data_template
   transaction['in']['scriptPubKey']['address']="Coinbase"
   transaction['in']['scriptPubKey']['scriptSig']['sig']="Coinbase"
   transaction['in']['scriptPubKey']['scriptSig']['pub']="Coinbase"
   transaction['in']['scriptPubKey']['valid']=1
   transaction['out']['address']=out
-  transaction['out']['value']=value*configfile.Config.sat
+  transaction['out']['value']=value
   transaction['in']['message']=message
   transaction['in']['value']=0
   transaction['total_sent']=value
@@ -233,6 +254,7 @@ def coinbase_transaction(out,value,message):
   dump_transaction(transaction_temp)
   return {"result":True,"info":"Transaction sent, "+transaction_temp['txid']}
 def give_miner_job():
+  current_block=get_current_block()
   with open(".data/unconfirmed.json") as f:
     unconfirmed=json.load(f)
     if not len(unconfirmed)>0:
@@ -243,6 +265,7 @@ def give_miner_job():
       return [blob,str(configfile.Config.difficulty)]
 
 def block_mined(address,nonce,hash):
+  current_block=get_current_block()
   with open(".data/blockchain.json") as f:
     blockchain=json.load(f)
   blockchain[-1]['confirmations']+=1
@@ -262,6 +285,7 @@ def block_mined(address,nonce,hash):
   with open(".data/unconfirmed.json","w") as f:
     json.dump(unc,f)
 def check_job(data):
+  current_block=get_current_block()
   with open(".data/unconfirmed.json") as f:
     unconfirmed=json.load(f)
   if len(unconfirmed)>0:
@@ -313,6 +337,20 @@ def get_transaction_history(address):
     if tdata['in']['scriptPubKey']['address']==address:
       transactions.append(tdata)
   return transactions
+def get_supply():
+  with open(".data/blockchain.json") as f:
+    blockchain=json.load(f)
+  supply=0
+  for a in blockchain:
+    for t in a['transactions']:
+      if t['coinbase']:
+        tdata=json.loads(bytes.fromhex(t['data']).decode('utf-8'))
+        supply+=tdata['out']['value']
+      else:
+        tdata=json.loads(bytes.fromhex(t['data']).decode('utf-8'))
+        if tdata['out']['address']=="burned":
+          supply-=tdata['out']['value']
+  return supply
 async def sock(websocket):
     async for message in websocket:
         print(f"[{str(time.time())}]: {message}")
@@ -345,6 +383,9 @@ async def sock(websocket):
         elif commands[0]=="GET_ADDRESS_TRANSACTIONS":
           tx_his=get_transaction_history(commands[1])
           await websocket.send("TRANSACTION_HISTORY;"+json.dumps(tx_his))
+        elif commands[0]=="GET_SUPPLY":
+          supply=get_supply()
+          await websocket.send("SUPPLY;"+str(supply))
 async def main():
     async with websockets.serve(sock, "0.0.0.0", 8000):
         await asyncio.Future()  # run forever
